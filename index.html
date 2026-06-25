@@ -133,6 +133,7 @@
 <div class="topbar"><div class="row" id="topbar"></div></div>
 <div class="wrap" id="app"></div>
 <div id="toast"></div>
+<input type="file" id="import-file" accept=".json" style="display:none">
 
 <script>
 /* ============================================================================
@@ -259,7 +260,7 @@ function fmtSG(v){ return (v>=0?'+':'')+v.toFixed(2); }
 function sgClass(v){ return v>0.001?'gain':v<-0.001?'loss':'flat'; }
 function escapeHtml(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function toast(msg){const t=document.getElementById('toast');t.innerHTML=`<div class="toast">${msg}</div>`;clearTimeout(window._tt);window._tt=setTimeout(()=>t.innerHTML='',2800);}
-function ICON(n){const i={back:'<path d="M15 18l-6-6 6-6"/>',flag:'<path d="M4 22V4M4 4h13l-2 4 2 4H4"/>',target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',plus:'<path d="M12 5v14M5 12h14"/>',chev:'<path d="M9 18l6-6-6-6"/>',map:'<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14"/>',chart:'<path d="M3 3v18h18M7 14l4-4 3 3 5-6"/>'};return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${i[n]}</svg>`;}
+function ICON(n){const i={back:'<path d="M15 18l-6-6 6-6"/>',flag:'<path d="M4 22V4M4 4h13l-2 4 2 4H4"/>',target:'<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',plus:'<path d="M12 5v14M5 12h14"/>',chev:'<path d="M9 18l6-6-6-6"/>',map:'<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2zM9 4v14M15 6v14"/>',chart:'<path d="M3 3v18h18M7 14l4-4 3 3 5-6"/>',download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>'};return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${i[n]}</svg>`;}
 function destroyMap(){ if(_map){try{_map.remove();}catch(e){} _map=null; _markers={};} }
 function benchToggle(){ return `<div class="seg" style="margin-bottom:0">${['tour','scratch'].map(b=>`<button aria-pressed="${state.benchmark===b}" onclick="setBenchmark('${b}')">vs ${BENCH_LABEL[b]}</button>`).join('')}</div>`; }
 function setBenchmark(b){ state.benchmark=b; saveSettings(); render(); }
@@ -329,6 +330,15 @@ function viewHome(){
       <div style="flex:1"><div style="font-weight:600">My courses</div>
         <div class="hint">${state.courses.length} saved · tap green centres once, reuse forever</div></div>
       <span style="color:var(--muted)">${ICON('chev')}</span>
+    </div>
+
+    <div class="card">
+      <p class="eyebrow">Data</p>
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="exportData()">${ICON('download')} Export</button>
+        <button class="btn btn-ghost" onclick="triggerImport()">${ICON('upload')} Import</button>
+      </div>
+      <p class="hint" style="margin-top:10px">Export saves all rounds and courses to a JSON file. Import merges from a backup — existing data is never deleted.</p>
     </div>
 
     <p class="eyebrow" style="margin:18px 4px 8px">Saved rounds</p>${rounds}`;
@@ -624,6 +634,52 @@ async function measure(){
     toast('Measured '+val+' yd to green centre (±'+Math.round(p.acc)+'m)');
   }catch(e){ toast(gpsErr(e)); }
 }
+
+/* ---------- EXPORT / IMPORT ---------- */
+async function exportData(){
+  const [r,c,s]=await Promise.all([Store.get(KEY_R),Store.get(KEY_C),Store.get(KEY_S)]);
+  const payload={_v:1,
+    rounds:r?JSON.parse(r):[],
+    courses:c?JSON.parse(c):[],
+    settings:s?JSON.parse(s):{}};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='strokes-gained-backup-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Backup downloaded');
+}
+function triggerImport(){ document.getElementById('import-file').click(); }
+async function importData(file){
+  let data;
+  try{ const text=await file.text(); data=JSON.parse(text); }
+  catch(e){ toast('Bad JSON — file not recognised, no data was changed'); return; }
+  if(!data||typeof data!=='object'||!Array.isArray(data.rounds)||!Array.isArray(data.courses)){
+    toast('Wrong format — expected a strokes-gained backup file'); return; }
+  const validRound=r=>r&&typeof r.id==='string'&&Array.isArray(r.holes);
+  const validCourse=c=>c&&typeof c.id==='string'&&Array.isArray(c.holes);
+  if(!data.rounds.every(validRound)||!data.courses.every(validCourse)){
+    toast('File contains invalid records — no data was changed'); return; }
+  data.rounds.forEach(inc=>{
+    const idx=state.rounds.findIndex(r=>r.id===inc.id);
+    if(idx===-1) state.rounds.push(inc); else state.rounds[idx]=inc;
+  });
+  data.courses.forEach(inc=>{
+    const idx=state.courses.findIndex(c=>c.id===inc.id);
+    if(idx===-1) state.courses.push(inc); else state.courses[idx]=inc;
+  });
+  if(data.settings&&['tour','scratch'].includes(data.settings.benchmark)){
+    state.benchmark=data.settings.benchmark; await saveSettings(); }
+  await saveRounds(); await saveCourses(); render();
+  const parts=[];
+  if(data.rounds.length) parts.push(data.rounds.length+' round'+(data.rounds.length!==1?'s':''));
+  if(data.courses.length) parts.push(data.courses.length+' course'+(data.courses.length!==1?'s':''));
+  toast('Imported '+(parts.join(', ')||'nothing new'));
+}
+document.getElementById('import-file').addEventListener('change',function(e){
+  const file=e.target.files[0]; if(file) importData(file); this.value='';
+});
 
 load();
 </script>
