@@ -242,7 +242,7 @@ const KEY_R='sg_rounds_v1', KEY_C='sg_courses_v1', KEY_S='sg_settings_v1';
    STATE + RENDER
 ============================================================================ */
 let state={rounds:[],courses:[],benchmark:'scratch',view:'home',roundId:null,holeIdx:0,draft:null,courseId:null,editHole:0};
-let _map=null,_markers={};
+let _map=null,_markers={},_delConfirm=false;
 
 async function load(){
   const r=await Store.get(KEY_R), c=await Store.get(KEY_C), s=await Store.get(KEY_S);
@@ -423,6 +423,7 @@ function editCourse(id){ state.courseId=id; state.editHole=0; goView('courseEdit
 
 /* ---------- COURSE EDIT (satellite map) ---------- */
 function viewCourseEdit(){
+  _delConfirm=false;
   const c=curCourse(); const app=document.getElementById('app');
   const noLeaflet=(typeof L==='undefined');
   app.innerHTML=`
@@ -436,8 +437,9 @@ function viewCourseEdit(){
       <div class="hgrid" id="hgrid"></div>
       <div id="holePanel"></div>
     </div>
-    <button class="btn btn-primary" onclick="goView('courses')">Done</button>`;
-  refreshHgrid(); refreshHolePanel();
+    <button class="btn btn-primary" onclick="goView('courses')">Done</button>
+    <div id="delete-zone" style="margin-top:6px"></div>`;
+  refreshHgrid(); refreshHolePanel(); renderDeleteZone();
   if(!noLeaflet) setTimeout(initMap,30);
 }
 function initMap(){
@@ -505,6 +507,29 @@ function searchPlace(){
   fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q))
     .then(r=>r.json()).then(a=>{ if(a&&a[0]&&_map){_map.setView([+a[0].lat,+a[0].lon],16);} else toast('Not found — pan the map manually'); })
     .catch(()=>toast('Search unavailable here — pan manually or paste coords'));
+}
+function renderDeleteZone(){
+  const el=document.getElementById('delete-zone'); if(!el) return;
+  const c=curCourse();
+  if(_delConfirm){
+    el.innerHTML=`<div class="card" style="border-color:var(--loss)">
+      <p style="font-weight:600;margin:0 0 6px">Delete ${escapeHtml(c.name)}?</p>
+      <p class="hint" style="margin:0 0 14px">This removes the course permanently. Rounds that used this course are not affected.</p>
+      <div class="btn-row">
+        <button class="btn" style="border-color:var(--loss);color:var(--loss)" onclick="confirmDeleteCourse()">Delete permanently</button>
+        <button class="btn btn-ghost" onclick="cancelDeleteCourse()">Cancel</button>
+      </div></div>`;
+  }else{
+    el.innerHTML=`<button class="btn btn-ghost" style="color:var(--loss);border-color:var(--loss)" onclick="promptDeleteCourse()">Delete course</button>`;
+  }
+}
+function promptDeleteCourse(){ _delConfirm=true; renderDeleteZone(); }
+function cancelDeleteCourse(){ _delConfirm=false; renderDeleteZone(); }
+function confirmDeleteCourse(){
+  const name=curCourse().name;
+  state.courses=state.courses.filter(c=>c.id!==state.courseId);
+  saveCourses(); goView('courses');
+  toast('Deleted '+escapeHtml(name));
 }
 
 /* ---------- ROUND ---------- */
